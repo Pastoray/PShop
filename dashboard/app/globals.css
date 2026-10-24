@@ -1,0 +1,106 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* shadcn/ui theme tokens (zinc base). Dark is the default: this is an ops console. */
+:root {
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.141 0.005 285.823);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.141 0.005 285.823);
+  --primary: oklch(0.21 0.006 285.885);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.967 0.001 286.375);
+  --secondary-foreground: oklch(0.21 0.006 285.885);
+  --muted: oklch(0.967 0.001 286.375);
+  --muted-foreground: oklch(0.552 0.016 285.938);
+  --accent: oklch(0.967 0.001 286.375);
+  --accent-foreground: oklch(0.21 0.006 285.885);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.92 0.004 286.32);
+  --ring: oklch(0.705 0.015 286.067);
+  --good: oklch(0.62 0.17 150);
+  --warn: oklch(0.75 0.16 75);
+  --info: oklch(0.6 0.16 255);
+}
+
+.dark {
+  --background: oklch(0.141 0.005 285.823);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.21 0.006 285.885);
+  --card-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.92 0.004 286.32);
+  --primary-foreground: oklch(0.21 0.006 285.885);
+  --secondary: oklch(0.274 0.006 286.033);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.274 0.006 286.033);
+  --muted-foreground: oklch(0.705 0.015 286.067);
+  --accent: oklch(0.274 0.006 286.033);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --ring: oklch(0.552 0.016 285.938);
+  --good: oklch(0.75 0.17 155);
+  --warn: oklch(0.82 0.15 80);
+  --info: oklch(0.72 0.14 250);
+}
+
+/* Storefront palette. The ops dashboard (/admin) keeps the shadcn tokens above. */
+@theme {
+  --color-paper: #f4f5f2;
+  --color-surface: #ffffff;
+  --color-ink: #101923;
+  --color-ink-soft: #566170;
+  --color-line: #d9dcd5;
+  --color-tag: #ff5b1f;
+  --color-tag-deep: #c63d08;
+  --color-signal: #2438ff;
+  --color-signal-deep: #1624b8;
+  --color-signal-wash: #e3e6ff;
+  --color-ok: #12795a;
+  --color-amber: #a85a00;
+  --color-sold: #8b2a2a;
+  --font-sans: "Instrument Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Bricolage Grotesque Variable", ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Condensed display voice: used for headlines and prices only. */
+.display { font-family: var(--font-display); font-stretch: 75%; font-weight: 800; letter-spacing: -0.01em; line-height: 0.96; }
+.display-md { font-family: var(--font-display); font-stretch: 85%; font-weight: 700; letter-spacing: -0.01em; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .pulse-dot { animation: pulse-dot 1.6s ease-in-out infinite; }
+}
+@keyframes pulse-dot { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-ring: var(--ring);
+  --color-good: var(--good);
+  --color-warn: var(--warn);
+  --color-info: var(--info);
+}
+
+@layer base {
+  * { @apply border-border outline-ring/50; }
+  body { @apply bg-background text-foreground antialiased; font-feature-settings: "tnum"; }
+}

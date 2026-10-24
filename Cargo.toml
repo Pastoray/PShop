@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/common",
+    "crates/order-service",
+    "crates/billing-service",
+    "crates/search-sync",
+    "crates/metrics-gateway",
+    "crates/loadgen",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Faster local iteration without giving up optimisation entirely.
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"

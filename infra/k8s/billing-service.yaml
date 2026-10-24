@@ -1,0 +1,108 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: billing-service
+  namespace: pshop
+  labels: { app: billing-service }
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  selector:
+    matchLabels: { app: billing-service }
+  template:
+    metadata:
+      labels: { app: billing-service }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
+    spec:
+      # Longer than the in-process drain (25s) so in-flight payments finish before SIGKILL.
+      terminationGracePeriodSeconds: 45
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: billing-service
+          image: pshop/billing-service:dev
+          imagePullPolicy: IfNotPresent
+          ports: [{ name: http, containerPort: 8080 }]
+          envFrom:
+            - configMapRef: { name: pshop-config }
+            - secretRef: { name: pshop-dev-credentials }
+          env:
+            # Per-replica throttle: total Postgres write rate = replicas x BILLING_MAX_RPS.
+            - { name: BILLING_MAX_RPS, value: "400" }
+            - { name: BILLING_PREFETCH, value: "128" }
+            - { name: BILLING_CONCURRENCY, value: "64" }
+            - { name: PG_POOL_SIZE, value: "16" }
+            - { name: PAYMENT_LATENCY_MS, value: "20" }
+            - { name: PAYMENT_FAILURE_RATE, value: "0.02" }
+            - { name: MAX_ATTEMPTS, value: "3" }
+          resources:
+            requests: { cpu: 250m, memory: 96Mi }
+            limits: { cpu: "1500m", memory: 384Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 3
+            failureThreshold: 60      # waits for Terraform-created secrets + DB migrations
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: billing-service
+  namespace: pshop
+  labels: { app: billing-service }
+spec:
+  selector: { app: billing-service }
+  ports: [{ name: http, port: 80, targetPort: http }]
+---
+# CPU is a weak proxy for "work waiting" in a queue consumer. The honest signal is queue depth
+# (rabbitmq_queue_messages_ready), which needs KEDA or prometheus-adapter. The commented block
+# shows the KEDA form; CPU keeps this working on a bare kind cluster.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: billing-service
+  namespace: pshop
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: billing-service }
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }
+  behavior:
+    scaleUp: { stabilizationWindowSeconds: 30 }
+    scaleDown: { stabilizationWindowSeconds: 300 }
+# --- KEDA alternative (scale on queue depth) ---------------------------------------------
+# apiVersion: keda.sh/v1alpha1
+# kind: ScaledObject
+# metadata: { name: billing-service, namespace: pshop }
+# spec:
+#   scaleTargetRef: { name: billing-service }
+#   minReplicaCount: 2
+#   maxReplicaCount: 8
+#   triggers:
+#     - type: rabbitmq
+#       metadata: { protocol: amqp, queueName: payments.process, mode: QueueLength, value: "5000", hostFromEnv: AMQP_URL }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: billing-service
+  namespace: pshop
+spec:
+  minAvailable: 1
+  selector: { matchLabels: { app: billing-service } }

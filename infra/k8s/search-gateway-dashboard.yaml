@@ -1,0 +1,110 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: search-sync
+  namespace: pshop
+  labels: { app: search-sync }
+spec:
+  replicas: 2          # same consumer group: Kafka splits the 6 partitions between them
+  selector:
+    matchLabels: { app: search-sync }
+  template:
+    metadata:
+      labels: { app: search-sync }
+      annotations: { prometheus.io/scrape: "true", prometheus.io/port: "8080", prometheus.io/path: /metrics }
+    spec:
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: search-sync
+          image: pshop/search-sync:dev
+          imagePullPolicy: IfNotPresent
+          ports: [{ name: http, containerPort: 8080 }]
+          envFrom:
+            - configMapRef: { name: pshop-config }
+          resources:
+            requests: { cpu: 100m, memory: 64Mi }
+            limits: { cpu: "1", memory: 256Mi }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+          startupProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 3, failureThreshold: 60 }
+          readinessProbe: { httpGet: { path: /readyz, port: http }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: search-sync, namespace: pshop, labels: { app: search-sync } }
+spec:
+  selector: { app: search-sync }
+  ports: [{ name: http, port: 80, targetPort: http }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metrics-gateway
+  namespace: pshop
+  labels: { app: metrics-gateway }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: metrics-gateway }
+  template:
+    metadata:
+      labels: { app: metrics-gateway }
+      annotations: { prometheus.io/scrape: "true", prometheus.io/port: "8080", prometheus.io/path: /metrics }
+    spec:
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: metrics-gateway
+          image: pshop/metrics-gateway:dev
+          imagePullPolicy: IfNotPresent
+          ports: [{ name: http, containerPort: 8080 }]
+          env:
+            - { name: RUST_LOG, value: info }
+            - { name: LOG_FORMAT, value: json }
+            - { name: PROM_URL, value: "http://prometheus:9090" }
+            - { name: POLL_MS, value: "1000" }
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { cpu: 500m, memory: 128Mi }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+          readinessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: metrics-gateway, namespace: pshop, labels: { app: metrics-gateway } }
+spec:
+  selector: { app: metrics-gateway }
+  ports: [{ name: http, port: 80, targetPort: http }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard
+  namespace: pshop
+  labels: { app: dashboard }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: dashboard }
+  template:
+    metadata:
+      labels: { app: dashboard }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: dashboard
+          image: pshop/dashboard:dev
+          imagePullPolicy: IfNotPresent
+          ports: [{ name: http, containerPort: 3000 }]
+          resources:
+            requests: { cpu: 50m, memory: 96Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+          readinessProbe: { httpGet: { path: /, port: http }, periodSeconds: 5 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: dashboard, namespace: pshop, labels: { app: dashboard } }
+spec:
+  selector: { app: dashboard }
+  ports: [{ name: http, port: 80, targetPort: http }]

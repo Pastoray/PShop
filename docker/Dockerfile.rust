@@ -1,0 +1,44 @@
+# syntax=docker/dockerfile:1.7
+#
+# One multi-stage Dockerfile for every Rust binary in the workspace:
+#   docker build -f docker/Dockerfile.rust --build-arg SERVICE=order-service -t pshop/order-service .
+#
+# Stages: chef (toolchain) -> planner (dependency recipe) -> builder (cached deps, then code)
+#         -> runtime (slim Debian, non-root, binary only).
+# Because the dependency layer is keyed on the recipe, editing service code does not rebuild
+# librdkafka/aws-sdk (minutes) — only the final compile (seconds).
+
+FROM rust:1-bookworm AS chef
+# libcurl headers: librdkafka 2.12 #includes <curl/curl.h> even with curl disabled.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends cmake libcurl4-openssl-dev zlib1g-dev pkg-config \
+ && rm -rf /var/lib/apt/lists/*
+RUN cargo install cargo-chef --locked
+WORKDIR /app
+
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
+ARG SERVICE
+COPY --from=planner /app/recipe.json recipe.json
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo chef cook --release --recipe-path recipe.json -p ${SERVICE}
+COPY . .
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo build --release --locked -p ${SERVICE} \
+ && cp target/release/${SERVICE} /usr/local/bin/service
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin app
+COPY --from=builder /usr/local/bin/service /usr/local/bin/service
+USER 10001
+ENV RUST_LOG=info BIND_ADDR=0.0.0.0:8080
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/service"]

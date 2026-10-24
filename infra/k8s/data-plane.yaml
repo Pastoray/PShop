@@ -1,0 +1,240 @@
+# Single-replica dev versions of the stateful dependencies. In production these are managed
+# services (ElastiCache, RDS, Amazon MQ, MSK, OpenSearch); only the connection strings change.
+# emptyDir volumes: data is lost on pod restart. Acceptable for a simulation, not for prod.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: redis, namespace: pshop, labels: { app: redis } }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: redis } }
+  template:
+    metadata: { labels: { app: redis } }
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          args: ["--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "noeviction"]
+          ports: [{ containerPort: 6379 }]
+          resources: { requests: { cpu: 100m, memory: 128Mi }, limits: { memory: 640Mi } }
+          readinessProbe: { exec: { command: ["redis-cli", "ping"] }, periodSeconds: 3 }
+          volumeMounts: [{ name: data, mountPath: /data }]
+        - name: exporter
+          image: oliver006/redis_exporter:v1.66.0
+          ports: [{ name: metrics, containerPort: 9121 }]
+          resources: { requests: { cpu: 10m, memory: 16Mi } }
+      volumes: [{ name: data, emptyDir: {} }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: pshop
+  annotations: { prometheus.io/scrape: "true", prometheus.io/port: "9121" }
+spec:
+  selector: { app: redis }
+  ports: [{ name: redis, port: 6379 }, { name: metrics, port: 9121 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: rabbitmq, namespace: pshop, labels: { app: rabbitmq } }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: rabbitmq } }
+  template:
+    metadata: { labels: { app: rabbitmq } }
+    spec:
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:3.13-management-alpine
+          envFrom: [{ secretRef: { name: pshop-dev-credentials } }]
+          env:
+            - name: RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS
+              value: "-rabbitmq_prometheus return_per_object_metrics true"
+          ports: [{ name: amqp, containerPort: 5672 }, { name: mgmt, containerPort: 15672 }, { name: metrics, containerPort: 15692 }]
+          resources: { requests: { cpu: 200m, memory: 256Mi }, limits: { memory: 1Gi } }
+          readinessProbe: { exec: { command: ["rabbitmq-diagnostics", "-q", "ping"] }, periodSeconds: 5, timeoutSeconds: 5 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  namespace: pshop
+  annotations: { prometheus.io/scrape: "true", prometheus.io/port: "15692" }
+spec:
+  selector: { app: rabbitmq }
+  ports: [{ name: amqp, port: 5672 }, { name: mgmt, port: 15672 }, { name: metrics, port: 15692 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: postgres, namespace: pshop, labels: { app: postgres } }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: postgres } }
+  template:
+    metadata: { labels: { app: postgres } }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - { name: POSTGRES_USER, value: pshop }
+            - { name: POSTGRES_PASSWORD, value: pshop }
+            - { name: POSTGRES_DB, value: pshop }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          args: ["-c", "max_connections=200", "-c", "shared_buffers=256MB"]
+          ports: [{ containerPort: 5432 }]
+          resources: { requests: { cpu: 200m, memory: 256Mi }, limits: { memory: 768Mi } }
+          readinessProbe: { exec: { command: ["pg_isready", "-U", "pshop", "-d", "pshop"] }, periodSeconds: 3 }
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+        - name: exporter
+          image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+          env:
+            - { name: DATA_SOURCE_NAME, value: "postgresql://pshop:pshop@localhost:5432/pshop?sslmode=disable" }
+          ports: [{ name: metrics, containerPort: 9187 }]
+          resources: { requests: { cpu: 10m, memory: 24Mi } }
+      volumes: [{ name: data, emptyDir: {} }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: pshop
+  annotations: { prometheus.io/scrape: "true", prometheus.io/port: "9187" }
+spec:
+  selector: { app: postgres }
+  ports: [{ name: pg, port: 5432 }, { name: metrics, port: 9187 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: kafka, namespace: pshop, labels: { app: kafka } }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: kafka } }
+  template:
+    metadata: { labels: { app: kafka } }
+    spec:
+      enableServiceLinks: false      # a Service named "kafka" would otherwise inject KAFKA_PORT=tcp://... and break the image
+      containers:
+        - name: kafka
+          image: apache/kafka:3.9.0
+          env:
+            - { name: KAFKA_NODE_ID, value: "1" }
+            - { name: KAFKA_PROCESS_ROLES, value: "broker,controller" }
+            - { name: KAFKA_LISTENERS, value: "PLAINTEXT://:9092,CONTROLLER://:9093" }
+            - { name: KAFKA_ADVERTISED_LISTENERS, value: "PLAINTEXT://kafka:9092" }
+            - { name: KAFKA_CONTROLLER_LISTENER_NAMES, value: CONTROLLER }
+            - { name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP, value: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT" }
+            - { name: KAFKA_CONTROLLER_QUORUM_VOTERS, value: "1@localhost:9093" }
+            - { name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR, value: "1" }
+            - { name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR, value: "1" }
+            - { name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR, value: "1" }
+            - { name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS, value: "0" }
+            - { name: KAFKA_NUM_PARTITIONS, value: "6" }
+            - { name: KAFKA_AUTO_CREATE_TOPICS_ENABLE, value: "true" }   # 6-partition default => same topic shape as compose
+          ports: [{ containerPort: 9092 }]
+          resources: { requests: { cpu: 200m, memory: 512Mi }, limits: { memory: 1Gi } }
+          readinessProbe: { tcpSocket: { port: 9092 }, initialDelaySeconds: 10, periodSeconds: 5 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: kafka, namespace: pshop }
+spec:
+  selector: { app: kafka }
+  ports: [{ name: broker, port: 9092 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: elasticsearch, namespace: pshop, labels: { app: elasticsearch } }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: elasticsearch } }
+  template:
+    metadata: { labels: { app: elasticsearch } }
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: elasticsearch
+          image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+          env:
+            - { name: discovery.type, value: single-node }
+            - { name: xpack.security.enabled, value: "false" }
+            - { name: ES_JAVA_OPTS, value: "-Xms512m -Xmx512m" }
+            - { name: cluster.routing.allocation.disk.threshold_enabled, value: "false" }
+          ports: [{ containerPort: 9200 }]
+          resources: { requests: { cpu: 300m, memory: 1Gi }, limits: { memory: 1536Mi } }
+          readinessProbe:
+            httpGet: { path: "/_cluster/health?wait_for_status=yellow&timeout=1s", port: 9200 }
+            periodSeconds: 5
+            timeoutSeconds: 3
+---
+apiVersion: v1
+kind: Service
+metadata: { name: elasticsearch, namespace: pshop }
+spec:
+  selector: { app: elasticsearch }
+  ports: [{ port: 9200 }]
+---
+# LocalStack: image 4.12 predates the March-2026 auth-token requirement. For a newer tag, add
+# LOCALSTACK_AUTH_TOKEN via a Secret.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: localstack, namespace: pshop, labels: { app: localstack } }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: localstack } }
+  template:
+    metadata: { labels: { app: localstack } }
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: localstack
+          image: localstack/localstack:4.12
+          env: [{ name: SERVICES, value: "s3,sqs,sns,secretsmanager" }]
+          ports: [{ containerPort: 4566 }]
+          resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 1Gi } }
+          readinessProbe: { httpGet: { path: /_localstack/health, port: 4566 }, periodSeconds: 5 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: localstack, namespace: pshop }
+spec:
+  selector: { app: localstack }
+  ports: [{ port: 4566 }]
+---
+# Applies the SAME Terraform as docker compose. The ConfigMap `terraform-localstack` is created
+# from infra/terraform/localstack/*.tf by `make kind-deploy`.
+apiVersion: batch/v1
+kind: Job
+metadata: { name: terraform-init, namespace: pshop }
+spec:
+  backoffLimit: 20
+  template:
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: wait-localstack
+          image: curlimages/curl:8.10.1
+          command: ["sh", "-c", "until curl -fs http://localstack:4566/_localstack/health | grep -q secretsmanager; do sleep 2; done"]
+      containers:
+        - name: terraform
+          image: hashicorp/terraform:1.9
+          workingDir: /tf
+          command: ["sh", "-c", "cp /src/*.tf /tf/ && terraform init -input=false && terraform apply -auto-approve -input=false"]
+          env:
+            - { name: TF_VAR_localstack_endpoint, value: "http://localstack:4566" }
+            - { name: TF_VAR_pg_host, value: postgres }
+            - { name: TF_VAR_pg_password, value: pshop }
+            - { name: TF_VAR_invoice_signing_key, value: dev-only-change-me }
+          volumeMounts:
+            - { name: src, mountPath: /src }
+            - { name: work, mountPath: /tf }
+      volumes:
+        - { name: src, configMap: { name: terraform-localstack } }
+        - { name: work, emptyDir: {} }

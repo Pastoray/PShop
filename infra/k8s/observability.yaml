@@ -1,0 +1,106 @@
+# Prometheus with Kubernetes service discovery: any pod annotated prometheus.io/scrape=true is scraped
+# (the Rust services); annotated Services cover the stateful dependencies (redis, rabbitmq, postgres).
+# kube-state-metrics (installed by `make kind-up`) supplies deployment health for the dashboard.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: prometheus, namespace: pshop }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: pshop-prometheus }
+rules:
+  - apiGroups: [""]
+    resources: [pods, services, endpoints]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: pshop-prometheus }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: pshop-prometheus }
+subjects: [{ kind: ServiceAccount, name: prometheus, namespace: pshop }]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: prometheus-config, namespace: pshop }
+data:
+  prometheus.yml: |
+    global: { scrape_interval: 5s, evaluation_interval: 5s }
+    scrape_configs:
+      - job_name: pods
+        kubernetes_sd_configs: [{ role: pod, namespaces: { names: [pshop] } }]
+        relabel_configs:
+          - { source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape], action: keep, regex: "true" }
+          - { source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path], action: replace, target_label: __metrics_path__, regex: (.+) }
+          - { source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port], action: replace, regex: "([^:]+)(?::\\d+)?;(\\d+)", replacement: "$1:$2", target_label: __address__ }
+          # job = the Deployment name, matching the compose job names the dashboard queries.
+          - { source_labels: [__meta_kubernetes_pod_label_app], target_label: job }
+          - { source_labels: [__meta_kubernetes_pod_name], target_label: instance }
+      - job_name: services
+        kubernetes_sd_configs: [{ role: service, namespaces: { names: [pshop] } }]
+        relabel_configs:
+          - { source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape], action: keep, regex: "true" }
+          - { source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port], action: replace, regex: "([^:]+)(?::\\d+)?;(\\d+)", replacement: "$1:$2", target_label: __address__ }
+          - { source_labels: [__meta_kubernetes_service_name], target_label: job }
+      - job_name: kube-state-metrics
+        static_configs: [{ targets: ["kube-state-metrics.kube-system.svc:8080"] }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: prometheus, namespace: pshop, labels: { app: prometheus } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: prometheus } }
+  template:
+    metadata: { labels: { app: prometheus } }
+    spec:
+      serviceAccountName: prometheus
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.55.1
+          args: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=6h"]
+          ports: [{ containerPort: 9090 }]
+          resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 768Mi } }
+          readinessProbe: { httpGet: { path: /-/ready, port: 9090 } }
+          volumeMounts: [{ name: config, mountPath: /etc/prometheus }]
+      volumes: [{ name: config, configMap: { name: prometheus-config } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: prometheus, namespace: pshop }
+spec:
+  selector: { app: prometheus }
+  ports: [{ port: 9090 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: grafana, namespace: pshop, labels: { app: grafana } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: grafana } }
+  template:
+    metadata: { labels: { app: grafana } }
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.3.0
+          env:
+            - { name: GF_SECURITY_ADMIN_PASSWORD, value: admin }
+            - { name: GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH, value: /var/lib/grafana/dashboards/pshop.json }
+          ports: [{ containerPort: 3000 }]
+          resources: { requests: { cpu: 50m, memory: 128Mi }, limits: { memory: 384Mi } }
+          volumeMounts:
+            - { name: datasources, mountPath: /etc/grafana/provisioning/datasources }
+            - { name: providers, mountPath: /etc/grafana/provisioning/dashboards }
+            - { name: dashboards, mountPath: /var/lib/grafana/dashboards }
+      volumes:
+        - { name: datasources, configMap: { name: grafana-datasources } }
+        - { name: providers, configMap: { name: grafana-providers } }
+        - { name: dashboards, configMap: { name: grafana-dashboards } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: grafana, namespace: pshop }
+spec:
+  selector: { app: grafana }
+  ports: [{ port: 3000 }]

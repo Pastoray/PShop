@@ -1,0 +1,31 @@
+[package]
+name = "billing-service"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+aws-config = { version = "1.12.0", features = ["behavior-version-latest"] }
+aws-sdk-s3 = "1.152.0"
+aws-sdk-sns = "1.116.0"
+aws-sdk-sqs = "1.114.0"
+axum = "0.8.9"
+chrono = "0.4.45"
+futures-lite = "2.6.1"
+governor = "0.10.4"
+hex = "0.4.3"
+hmac = "0.13.0"
+lapin = "4.12.3"
+prometheus = "0.14.0"
+pshop-common = { version = "0.1.0", path = "../common" }
+rand = "0.10.3"
+rdkafka = { version = "0.39.0", features = ["cmake-build", "tokio"] }
+redis = { version = "1.7.1", features = ["tokio-comp", "connection-manager", "script"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "uuid", "chrono", "json", "macros"] }
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "signal", "time", "sync"] }
+tracing = "0.1.44"
+uuid = { version = "1.28.0", features = ["v4", "v7"] }

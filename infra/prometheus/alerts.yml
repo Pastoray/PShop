@@ -1,0 +1,84 @@
+groups:
+  - name: pshop-order-path
+    rules:
+      - alert: OrderAcceptLatencySLOBreach
+        expr: histogram_quantile(0.99, sum by (le) (rate(pshop_order_accept_seconds_bucket[1m]))) > 0.005
+        for: 1m
+        labels: { severity: warning }
+        annotations:
+          summary: "p99 order acceptance above the 5 ms SLO"
+          description: "p99 = {{ $value | humanizeDuration }}. Check Redis/RabbitMQ latency panels first."
+
+      - alert: OrdersBeingShed
+        expr: sum(rate(pshop_orders_rejected_total{reason=~"overload|queue_full|queue_unavailable|redis_unavailable"}[1m])) > 1
+        for: 1m
+        labels: { severity: warning }
+        annotations:
+          summary: "Orders are being shed ({{ $value | humanize }}/s)"
+          description: "Not an error: this is back-pressure working. Look at which reason dominates."
+
+      - alert: StockReleaseFailing
+        expr: increase(pshop_stock_release_failures_total[5m]) > 0
+        labels: { severity: critical }
+        annotations:
+          summary: "Stock compensation failed; inventory is under-reported until reconcile"
+
+      - alert: PublishOutcomeUnknown
+        expr: sum(rate(pshop_orders_unknown_outcome_total[5m])) > 0.5
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: "Ambiguous broker publishes (reservations kept on purpose)"
+
+  - name: pshop-pipeline
+    rules:
+      - alert: PaymentBacklogGrowing
+        expr: sum(rabbitmq_queue_messages_ready{queue="payments.process"}) > 100000
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: "Payment queue depth {{ $value | humanize }}"
+          description: "Queue cap is 500k; beyond it order-service answers 503 (queue_full)."
+
+      - alert: PaymentsNotDraining
+        expr: sum(rabbitmq_queue_messages_ready{queue="payments.process"}) > 1000 and sum(rate(pshop_payments_processed_total{outcome="ok"}[2m])) < 1
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "Payment queue has messages but nothing is being processed"
+
+      - alert: DeadLetteredPayments
+        expr: increase(pshop_dlq_messages_total[5m]) > 0
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $value | humanize }} payment(s) dead-lettered in 5m (SNS alert fired)"
+
+      - alert: OutboxStuck
+        expr: max(pshop_outbox_pending) > 5000
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "Outbox backlog {{ $value | humanize }}: Kafka unreachable or relay stalled"
+
+      - alert: SearchIndexLagging
+        expr: max(pshop_search_sync_lag_seconds) > 30
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: "Elasticsearch is {{ $value | humanizeDuration }} behind"
+
+  - name: pshop-availability
+    rules:
+      - alert: ServiceDown
+        expr: up{job=~"order-service|billing-service|search-sync|metrics-gateway|rabbitmq|redis|postgres"} == 0
+        for: 30s
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.job }} / {{ $labels.instance }} is down"
+
+      - alert: RedisMemoryHigh
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.8
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: "Redis at {{ $value | humanizePercentage }} of maxmemory (policy is noeviction: at 100% writes fail)"

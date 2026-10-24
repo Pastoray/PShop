@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: pshop
+resources:
+  - namespace.yaml
+  - config.yaml
+  - data-plane.yaml
+  - order-service.yaml
+  - billing-service.yaml
+  - search-gateway-dashboard.yaml
+  - observability.yaml
+  - ingress.yaml
+# Kustomize refuses to read files outside this directory, so `make kind-deploy` first copies the
+# compose Grafana files into ./grafana/ (git-ignored) and creates the `terraform-localstack`
+# ConfigMap from infra/terraform/localstack/*.tf. Compose and Kubernetes thus share one source.
+configMapGenerator:
+  - name: grafana-datasources
+    files: [datasources.yml=grafana/datasources.yml]
+  - name: grafana-providers
+    files: [dashboards.yml=grafana/dashboards.yml]
+  - name: grafana-dashboards
+    files: [pshop.json=grafana/pshop.json]
+generatorOptions:
+  disableNameSuffixHash: true

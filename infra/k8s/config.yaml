@@ -1,0 +1,33 @@
+# Non-secret configuration shared by the Rust services.
+# Postgres credentials and the invoice signing key are NOT here: services fetch them
+# from AWS Secrets Manager (LocalStack) at startup. The only "secrets" below are the
+# dummy LocalStack credentials and the broker password of this dev cluster.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pshop-config
+  namespace: pshop
+data:
+  RUST_LOG: info
+  LOG_FORMAT: json
+  AWS_ENDPOINT_URL: http://localstack:4566
+  AWS_REGION: us-east-1
+  REDIS_URL: redis://redis:6379
+  KAFKA_BROKERS: kafka:9092
+  ES_URL: http://elasticsearch:9200
+  QUEUE_MAX_LEN: "500000"
+  SEED_SKUS: "100"
+  SEED_STOCK_PER_SKU: "1000000"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pshop-dev-credentials
+  namespace: pshop
+type: Opaque
+stringData:
+  AWS_ACCESS_KEY_ID: test
+  AWS_SECRET_ACCESS_KEY: test
+  RABBITMQ_DEFAULT_USER: pshop
+  RABBITMQ_DEFAULT_PASS: pshop
+  AMQP_URL: amqp://pshop:pshop@rabbitmq:5672/%2f

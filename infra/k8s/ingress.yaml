@@ -1,0 +1,31 @@
+# ingress-nginx is the Ingress Controller (the in-cluster twin of infra/nginx/ingress.conf).
+# Cloudflare sits in front of this in a real deployment; locally kind maps host :8080 to it.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pshop
+  namespace: pshop
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "1"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"      # long-lived WebSocket
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: 4k
+    # Never replay a POST to another pod after it may have been processed.
+    nginx.ingress.kubernetes.io/proxy-next-upstream: "error timeout"
+    nginx.ingress.kubernetes.io/proxy-next-upstream-tries: "2"
+    nginx.ingress.kubernetes.io/load-balance: ewma              # latency-aware balancing
+    nginx.ingress.kubernetes.io/upstream-keepalive-connections: "256"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - { path: /v1/orders,    pathType: Prefix, backend: { service: { name: order-service,   port: { number: 80 } } } }
+          - { path: /v1/search,    pathType: Prefix, backend: { service: { name: search-sync,     port: { number: 80 } } } }
+          - { path: /v1/products,  pathType: Prefix, backend: { service: { name: search-sync,     port: { number: 80 } } } }
+          # Read side of an order: status + invoice PDF (billing owns Postgres and the invoice bucket).
+          - { path: /v1/order-status, pathType: Prefix, backend: { service: { name: billing-service, port: { number: 80 } } } }
+          - { path: /v1/invoices,     pathType: Prefix, backend: { service: { name: billing-service, port: { number: 80 } } } }
+          - { path: /ws,           pathType: Prefix, backend: { service: { name: metrics-gateway, port: { number: 80 } } } }
+          - { path: /api/snapshot, pathType: Exact,  backend: { service: { name: metrics-gateway, port: { number: 80 } } } }
+          - { path: /,             pathType: Prefix, backend: { service: { name: dashboard,       port: { number: 80 } } } }

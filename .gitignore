@@ -1,0 +1,12 @@
+/target
+.env
+**/node_modules/
+**/.next/
+dashboard/out/
+dashboard/next-env.d.ts
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+**/.terraform.lock.hcl
+*.log
+infra/k8s/grafana/

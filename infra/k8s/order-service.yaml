@@ -1,0 +1,110 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: pshop
+  labels: { app: order-service }
+spec:
+  replicas: 3
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 50%, maxUnavailable: 0 }   # never dip below capacity during a rollout
+  selector:
+    matchLabels: { app: order-service }
+  template:
+    metadata:
+      labels: { app: order-service }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      # Spread replicas over nodes so one node loss costs 1/3 of capacity, not all of it.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector: { matchLabels: { app: order-service } }
+      containers:
+        - name: order-service
+          image: pshop/order-service:dev
+          imagePullPolicy: IfNotPresent     # kind: images are side-loaded
+          ports: [{ name: http, containerPort: 8080 }]
+          envFrom:
+            - configMapRef: { name: pshop-config }
+            - secretRef: { name: pshop-dev-credentials }
+          env:
+            - { name: MAX_INFLIGHT, value: "4096" }
+            - { name: REDIS_CONNECTIONS, value: "4" }
+            - { name: AMQP_CHANNELS, value: "8" }
+          resources:
+            requests: { cpu: 250m, memory: 64Mi }
+            limits: { cpu: "1", memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+            failureThreshold: 60
+          # Readiness = "can actually take an order" (Redis + broker). Failing it removes the pod
+          # from the Service without restarting it, which is the right reaction to a dependency outage.
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 3
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              # Let the endpoint removal propagate to ingress before SIGTERM stops accepting.
+              exec: { command: ["/bin/sh", "-c", "sleep 5"] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service
+  namespace: pshop
+  labels: { app: order-service }
+spec:
+  selector: { app: order-service }
+  ports: [{ name: http, port: 80, targetPort: http }]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: order-service
+  namespace: pshop
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: order-service }
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 60 } }
+  behavior:
+    # A traffic spike is a ramp of seconds: scale up fast, scale down slowly to avoid flapping.
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - { type: Percent, value: 100, periodSeconds: 15 }
+        - { type: Pods, value: 4, periodSeconds: 15 }
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies: [{ type: Percent, value: 25, periodSeconds: 60 }]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: order-service
+  namespace: pshop
+spec:
+  minAvailable: 2
+  selector: { matchLabels: { app: order-service } }
